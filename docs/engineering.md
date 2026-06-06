@@ -94,15 +94,15 @@ Reasons this is documented separately:
 │   ┌─ CI/CD (GitHub Actions) ───────────────────────────────────┐    │
 │   │                                                            │    │
 │   │   CI:    .github/workflows/ci.yml    lint / test / integ   │    │
-│   │   Docs:  .github/workflows/docs.yml  Markdown link check   │    │
-│   │   Both invoke Makefile targets; the Makefile is the        │    │
+│   │   Docs:  .github/workflows/docs.yml  Markdown + YAML check │    │
+│   │   Gates invoke Makefile targets; the Makefile is the       │    │
 │   │   single source of truth for commands.                     │    │
 │   │                                                            │    │
 │   └────────────────────────────────────────────────────────────┘    │
 │                                                                     │
 │   ┌─ Collaboration workflow ───────────────────────────────────┐    │
 │   │                                                            │    │
-│   │   Branch model: dev / master (GitFlow Lite)                │    │
+│   │   Branch model: protected main + short-lived PR branches   │    │
 │   │   PR template: .github/PULL_REQUEST_TEMPLATE.md            │    │
 │   │   ISSUE_TEMPLATE: bug / feature / use-case / docs / config │    │
 │   │   CONTRIBUTING.md: contributor onboarding                  │    │
@@ -160,7 +160,7 @@ matching `.py` file.
 | Command | Purpose | When to use |
 |---|---|---|
 | `/commit` | Generate a Conventional Commits message | After a focused change, ready to commit |
-| `/new-branch` | Create branch under dev/master strategy | Starting a new feat / fix / hotfix |
+| `/new-branch` | Create branch from protected main | Starting a new feat / fix / ci branch |
 | `/pr` | Open a GitHub PR with the repo template | Ready to merge |
 
 Skills and rules use **independent loading mechanisms**: rules auto-load
@@ -275,8 +275,9 @@ make format        ruff fix + format
 make lint          ruff + import-linter + datetime discipline + openapi drift
 make test          pytest tests/unit
 make integration   pytest tests/integration
+make package       build sdist/wheel + smoke-test wheel import
 make cov           pytest unit + integration, coverage gate (fail under 80%)
-make ci            lint + test + integration   ← CI invokes these targets
+make ci            lint + test + integration + package
 make clean         clear caches
 ```
 
@@ -313,13 +314,15 @@ Every key has a sensible default except the `API_KEY` fields, which you fill in.
 ┌──────────────────────────────────────────────────────────┐
 │                                                          │
 │   GitHub Actions   (.github/workflows/)                  │
-│     ci.yml    push (main/dev/master) + PR                │
-│       ├ make install-deps   (uv sync --frozen)           │
-│       ├ make lint           (ruff + import-linter +      │
-│       │                      datetime + openapi drift)   │
-│       ├ make test           (pytest tests/unit)          │
-│       └ make integration    (pytest tests/integration)   │
+│     ci.yml    push (main) + PR                           │
+│       ├ lint              make lint                      │
+│       ├ unit tests        make test                      │
+│       ├ integration tests make integration               │
+│       └ package build     make package                   │
 │     docs.yml  Markdown link check + issue-template YAML  │
+│       └ make docs-check                                  │
+│     commits.yml Conventional Commit subject check        │
+│       └ make check-commits                               │
 │                                                          │
 │   Consistency:                                           │
 │     ├ astral-sh/setup-uv (cache keyed by uv.lock)        │
@@ -339,55 +342,38 @@ Every key has a sensible default except the `API_KEY` fields, which you fill in.
 | OpenAPI drift | `make lint` (dump_openapi.py --check) | schema ≠ committed openapi.json |
 | Unit | `make test` (pytest tests/unit) | any failure |
 | Integration | `make integration` (pytest tests/integration) | any failure |
+| Package build | `make package` (sdist/wheel + import smoke test) | build or import failure |
+| Commit message | `Commit lint` workflow | non-Conventional Commit subject |
 
 Integration tests run with a `FakeLLMClient` — no live credentials are needed in CI.
-Commit message format is enforced **locally** via `gitlint` in the `commit-msg`
-pre-commit stage; it does not run in CI.
+Commit message format is enforced locally via `gitlint` in the `commit-msg`
+pre-commit stage and remotely via the `Commit lint` workflow.
 
 ### 6.3 Branch protection
 
 | Branch | Rule |
 |---|---|
-| **master** | branch protection: PR + 1 review + green CI; no direct push |
-| **dev** | same as above |
-| feat / fix / hotfix | free push; rebase parent before merge |
+| **main** | branch protection: PR + two reviews + green required checks; no direct push |
+| feat / fix / docs / ci | contributor branches; merge through PR |
 
 ---
 
 ## 7. Collaboration workflow
 
-### 7.1 Branch model (GitFlow Lite)
+### 7.1 Branch model
+
+EverOS uses a simple protected-main model after the 1.0 history reset:
 
 ```
-                              v0.1                              v0.2                                v1.0
-                                ▲                                 ▲                                   ▲
-                                │ release PR                      │ release PR                        │ release PR
-                                │ (dev→master+tag)                │ (dev→master+tag)                  │ (dev→master+tag)
-master   ●──────────────────────●─────────────●──────────────────●──────────────────────────────────●────►  stable / released
-                                │             ▲                  │                                  │
-                                │             │ merge hotfix     │                                  │
-                                │             │                  │                                  │
-                                │       ●──●──┘                  │                                  │
-                                │       │ hotfix branch          │                                  │
-                                │       │ (cut from master)      │                                  │
-                                │       │                        │                                  │
-                                │       ▼ sync to dev            │                                  │
-                                │       │                        │                                  │
-dev   ●──●──●──●──●──●──●──●──●─●──●──●─●──●──●──●──●──●──●──●──●─●──●──●──●──●──●──●──●──●──●──●──●─────►  integration
-            ▲                   ↑                                ↑                                  ↑
-            │             release point                   release point                       release point
-       feat/A             (dev HEAD →                     (dev HEAD →                         (dev HEAD →
-       ●──●──●             master + v0.1)                  master + v0.2)                      master + v1.0)
-
-
-  feat/*   : cut from dev → PR → merge into dev
-  hotfix/* : cut from master → merge into master + sync into dev (double merge)
-  release  : dev → master + tag on master (no separate release branch)
-
-  Vertical │ in the diagram = "dev HEAD merged into master via release PR + v0.x tag"
+main  ●────●────●────●────► protected, releasable
+       ▲    ▲    ▲
+       │    │    └─ PR from ci/*
+       │    └────── PR from fix/*
+       └─────────── PR from feat/*
 ```
 
-Details in [../.claude/skills/new-branch/SKILL.md](../.claude/skills/new-branch/SKILL.md).
+All work starts from `main`, lands through a pull request, and requires green
+checks. Force-pushing `main` is reserved only for repository recovery work.
 
 ### 7.2 PR template
 
@@ -415,8 +401,9 @@ ci:       CI configuration
 revert:   revert a previous commit
 ```
 
-`gitlint` enforces the format **locally** via its `contrib-title-conventional-commits`
-rule in the commit-msg pre-commit stage. See
+`gitlint` enforces the format locally via its `contrib-title-conventional-commits`
+rule in the commit-msg pre-commit stage. GitHub Actions runs the same policy on
+pushes to `main` and pull requests. See
 [../.claude/skills/commit/SKILL.md](../.claude/skills/commit/SKILL.md).
 
 ---
