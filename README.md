@@ -111,9 +111,11 @@ for fast retrieval and self-evolving reuse.
 ### 0. Prerequisites
 
 - Python 3.12+
-- API keys for the default providers: OpenRouter for chat / multimodal, and
-  DeepInfra for embedding / rerank. You can use other OpenAI-compatible
-  providers by changing the matching `*__BASE_URL` fields in `.env`.
+- No API keys are needed for `everos demo`.
+- API keys are needed for the server-backed memory flow: OpenRouter for chat /
+  multimodal, and DeepInfra for embedding / rerank by default. You can use
+  other OpenAI-compatible providers by changing the matching `*__BASE_URL`
+  fields in `.env`.
 
 ### 1. Install
 
@@ -289,6 +291,7 @@ git clone https://github.com/EverMind-AI/EverOS.git
 cd EverOS
 uv sync                              # creates ./.venv and installs deps
 source .venv/bin/activate            # or prefix commands with `uv run`
+everos demo --plain                  # try the local educational demo; no API keys needed
 everos init                          # fill the four API key slots in .env (two distinct keys)
 
 everos --help
